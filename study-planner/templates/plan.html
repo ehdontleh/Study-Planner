@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Plan — Study Planner{% endblock %}
+{% block content %}
+<div class="shell">
+  <div class="page-head">
+    <div class="eyebrow">Planning engine</div>
+    <h1>Build a study session</h1>
+    <p>Tell it how much time you have — it'll pick the best-fit set of unlocked tasks by priority and deadline urgency, and adjust estimates by your own pace.</p>
+  </div>
+
+  <div class="card" style="max-width:420px;">
+    <form method="POST" action="{{ url_for('plan') }}" class="field-row" style="align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field" style="margin-bottom:0;flex:1;">
+        <label for="available_minutes">Minutes available</label>
+        <input type="number" id="available_minutes" name="available_minutes" min="1"
+               value="{{ available_minutes or 60 }}" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Build plan</button>
+    </form>
+  </div>
+
+  {% if plan_tasks is not none %}
+  <div class="card">
+    <div class="card-head">
+      <h2>Your session</h2>
+      <span class="muted">{{ total_minutes }} of {{ available_minutes }} minutes used</span>
+    </div>
+
+    {% if plan_tasks %}
+    <table>
+      <thead>
+        <tr><th>Task</th><th>Subject / Topic</th><th>Estimate</th><th>Adjusted</th><th>Deadline</th><th>Score</th></tr>
+      </thead>
+      <tbody>
+        {% for task in plan_tasks %}
+        <tr>
+          <td class="task-title">{{ task.title }}</td>
+          <td class="muted">{{ task.subject_name }} — {{ task.topic_name }}</td>
+          <td>{{ task.estimated_minutes }} min</td>
+          <td>
+            {{ task.plan_minutes }} min
+            {% if task.pace_multiplier != 1.0 %}
+              <span class="muted">(adjusted ×{{ task.pace_multiplier }} from your pace)</span>
+            {% endif %}
+          </td>
+          <td>{{ task.deadline or '—' }}</td>
+          <td>{{ task.score }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      <div class="glyph">— · —</div>
+      <p>Nothing fits in that window — try a larger time budget, or check that you have unlocked, incomplete tasks with estimates under it.</p>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

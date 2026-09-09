@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}Planner — Study Planner{% endblock %}
+{% block content %}
+<div class="shell">
+
+  <div class="page-head">
+    <div class="eyebrow">Welcome back, {{ current_user.username }}</div>
+    <h1>Your planner</h1>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Overall progress</h2>
+      <span class="muted">{{ completed_tasks }} of {{ total_tasks }} tasks completed</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" style="width: {{ progress }}%;"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><h2>Add a subject</h2></div>
+    <form method="POST" action="{{ url_for('add_subject') }}" class="field-row" style="align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field" style="margin-bottom:0;flex:3;">
+        <label for="subject_name">Subject name</label>
+        <input type="text" id="subject_name" name="name" placeholder="e.g. Calculus II" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Add subject</button>
+    </form>
+  </div>
+
+  {% if not subjects %}
+  <div class="card">
+    <div class="empty">
+      <div class="glyph">— · —</div>
+      <p>No subjects yet. Add one above to get started, or head to the AI Assistant to generate a full topic/task breakdown from a goal.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  {% for subject in subjects %}
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h2>{{ subject.name }}</h2>
+        <span class="muted">{{ subject.completed_tasks }} of {{ subject.total_tasks }} tasks completed</span>
+      </div>
+    </div>
+    {% if subject.has_tasks %}
+    <div class="progress-track" style="margin-bottom:16px;">
+      <div class="progress-fill" style="width: {{ subject.progress }}%;"></div>
+    </div>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('add_topic') }}" class="field-row" style="align-items:flex-end;margin-bottom:6px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="subject_id" value="{{ subject.id }}">
+      <div class="field" style="margin-bottom:0;flex:3;">
+        <label>Add a topic to {{ subject.name }}</label>
+        <input type="text" name="name" placeholder="e.g. Integration by parts" required>
+      </div>
+      <button type="submit" class="btn btn-sm">Add topic</button>
+    </form>
+
+    {% set subject_topics = topics | selectattr("subject_id", "equalto", subject.id) | list %}
+    {% if subject_topics %}
+    {% for topic in subject_topics %}
+    <div class="ai-topic">
+      <div class="card-head" style="margin-bottom:8px;">
+        <h3>{{ topic.name }}</h3>
+      </div>
+
+      {% set topic_tasks = tasks | selectattr("topic_id", "equalto", topic.id) | list %}
+      {% if topic_tasks %}
+      <table>
+        <thead>
+          <tr>
+            <th>Task</th><th>Priority</th><th>Deadline</th><th>Est.</th><th>Status</th><th>Timer</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for task in topic_tasks %}
+          <tr>
+            <td>
+              <div class="task-title">{{ task.title }}</div>
+              {% if task.description %}<div class="muted">{{ task.description }}</div>{% endif %}
+              {% if task.resource_url %}<a href="{{ task.resource_url }}" target="_blank" rel="noopener" class="muted">resource ↗</a>{% endif %}
+            </td>
+            <td>{{ {1:'Low',2:'Medium',3:'High'}.get(task.priority, task.priority) }}</td>
+            <td>{{ task.deadline or '—' }}</td>
+            <td>{{ task.estimated_minutes }} min</td>
+            <td>
+              {% if task.status == 'Completed' %}
+                <span class="pill pill-done">Completed</span>
+              {% elif not task.available %}
+                <span class="pill pill-locked">Locked</span>
+              {% else %}
+                <span class="pill">Incomplete</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if task.status != 'Completed' and task.available %}
+              <div class="btn-row">
+                <button type="button" class="btn btn-sm" data-start-task="{{ task.id }}">Start</button>
+                <button type="button" class="btn btn-sm" data-stop-task="{{ task.id }}" disabled>Stop</button>
+                <span class="timer-display" data-timer-display="{{ task.id }}">00:00</span>
+              </div>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="task-actions">
+                {% if task.status != 'Completed' and task.available %}
+                <form method="POST" action="{{ url_for('complete') }}" data-complete-form="{{ task.id }}" style="display:flex;gap:4px;align-items:center;">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="task_id" value="{{ task.id }}">
+                  <input type="hidden" name="time_studied" value="0" data-time-studied-input="{{ task.id }}">
+                  <input type="number" min="0" step="1" placeholder="min" title="Minutes studied — filled in automatically by the timer, or enter manually" data-minutes-input="{{ task.id }}" style="width:64px;padding:5px 7px;font-size:12px;">
+                  <button type="submit" class="btn btn-sm btn-primary" data-complete-btn="{{ task.id }}">Mark complete</button>
+                </form>
+                {% endif %}
+                <a href="{{ url_for('edit', task_id=task.id) }}" class="btn btn-sm">Edit</a>
+                <form method="POST" action="{{ url_for('delete') }}" onsubmit="return confirm('Delete this task?');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="task_id" value="{{ task.id }}">
+                  <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No tasks in this topic yet.</p>
+      {% endif %}
+
+      <details style="margin-top:10px;">
+        <summary class="muted" style="cursor:pointer;">+ Add a task to {{ topic.name }}</summary>
+        <form method="POST" action="{{ url_for('add') }}" style="margin-top:12px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="topic_id" value="{{ topic.id }}">
+          <div class="field">
+            <label>Title</label>
+            <input type="text" name="title" required>
+          </div>
+          <div class="field">
+            <label>Description</label>
+            <textarea name="description" rows="2"></textarea>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Estimated minutes</label>
+              <input type="number" name="estimated_minutes" min="1" value="30" required>
+            </div>
+            <div class="field">
+              <label>Priority</label>
+              <select name="priority">
+                <option value="1">Low</option>
+                <option value="2" selected>Medium</option>
+                <option value="3">High</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Difficulty</label>
+              <select name="difficulty">
+                <option value="Easy">Easy</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="Hard">Hard</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Deadline</label>
+              <input type="date" name="deadline">
+            </div>
+            <div class="field">
+              <label>Resource URL</label>
+              <input type="url" name="resource_url" placeholder="https://…">
+            </div>
+          </div>
+          {% if tasks %}
+          <div class="field">
+            <label>Prerequisites (must be completed first)</label>
+            <fieldset class="checks">
+              {% for t in tasks %}
+              <label class="check-opt">
+                <input type="checkbox" name="prerequisites" value="{{ t.id }}">
+                {{ t.subject_name }} — {{ t.title }}
+              </label>
+              {% endfor %}
+            </fieldset>
+          </div>
+          {% endif %}
+          <button type="submit" class="btn btn-primary">Add task</button>
+        </form>
+      </details>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="muted">No topics yet — add one above.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='timer.js') }}"></script>
+{% endblock %}
