@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import json
 from datetime import datetime, date, timedelta
@@ -860,6 +861,112 @@ def generate_breakdown(goal):
     }
 
 
+_PLAN_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _extract_plan_deadline(heading_text):
+    """
+    Looks for a date range ending in "... -> Month YYYY" (also accepts '→' or
+    the word 'to' as the separator) and returns an ISO date for the last day
+    of that end month, or None if no such range is found. Only the end month
+    is required — "Feb -> Mar 2027" (no year on the first month) works too.
+    """
+    m = re.search(
+        r'(?:→|->|\bto\b)\s*([A-Za-z]+)\.?\s+(\d{4})',
+        heading_text,
+        re.IGNORECASE
+    )
+    if not m:
+        return None
+    end_month_name, end_year = m.group(1).lower(), int(m.group(2))
+    month = _PLAN_MONTHS.get(end_month_name)
+    if not month:
+        return None
+    if month == 12:
+        last_day = 31
+    else:
+        last_day = (date(end_year, month + 1, 1) - timedelta(days=1)).day
+    return date(end_year, month, last_day).isoformat()
+
+
+def parse_plan_markdown(text):
+    """
+    Parses a loosely-structured markdown study plan into subjects/topics/tasks:
+      - A line starting with '#' or '##' starts a new SUBJECT. If its heading
+        text contains a "Month YYYY -> Month YYYY" style range, the end month
+        becomes the deadline for every task under it.
+      - A line starting with '###' or more starts a new TOPIC under the
+        current subject (a 'General' topic is created if none exists yet).
+      - A line starting with '- [ ]' or '* [ ]' becomes a TASK under the
+        current topic.
+      - Anything else (prose, blank lines) is ignored.
+    Subjects/topics that end up with no tasks at all are dropped.
+    """
+    subjects = []
+    current_subject = None
+    current_topic = None
+
+    def ensure_subject():
+        nonlocal current_subject
+        if current_subject is None:
+            current_subject = {"name": "Imported plan", "deadline": None, "topics": []}
+            subjects.append(current_subject)
+        return current_subject
+
+    def ensure_topic():
+        nonlocal current_topic
+        subj = ensure_subject()
+        if current_topic is None:
+            current_topic = {"name": "General", "tasks": []}
+            subj["topics"].append(current_topic)
+        return current_topic
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        heading_match = re.match(r'^(#{1,6})\s+(.*)', line)
+        if heading_match:
+            hashes, title = heading_match.groups()
+            title = re.sub(r'\*\*(.*?)\*\*', r'\1', title).strip()
+            title = re.sub(r'^\d+\.\s*', '', title)
+            if len(hashes) <= 2:
+                current_subject = {
+                    "name": title,
+                    "deadline": _extract_plan_deadline(title),
+                    "topics": []
+                }
+                subjects.append(current_subject)
+                current_topic = None
+            else:
+                ensure_subject()
+                current_topic = {"name": title, "tasks": []}
+                current_subject["topics"].append(current_topic)
+            continue
+
+        task_match = re.match(r'^[-*]\s+\[\s?[xX ]?\s?\]\s+(.*)', line)
+        if task_match:
+            task_title = re.sub(r'\*\*(.*?)\*\*', r'\1', task_match.group(1)).strip()
+            if task_title:
+                ensure_topic()["tasks"].append(task_title)
+            continue
+        # anything else (prose lines) is ignored
+
+    cleaned = []
+    for subj in subjects:
+        topics = [t for t in subj["topics"] if t["tasks"]]
+        if topics:
+            subj["topics"] = topics
+            cleaned.append(subj)
+    return cleaned
+
+
 @app.route("/ai_assistant", methods=["GET", "POST"])
 @login_required
 def ai_assistant():
@@ -906,6 +1013,46 @@ def ai_assistant():
             connection.commit()
             connection.close()
             flash(f"Imported \"{goal}\" into your planner.")
+            return redirect(url_for("index"))
+
+        elif action == "import_plan":
+            plan_text = request.form.get("plan_text", "")
+            parsed_subjects = parse_plan_markdown(plan_text)
+
+            if not parsed_subjects:
+                flash("Couldn't find any checklist items ('- [ ]' / '* [ ]') in that text — nothing was imported.")
+                return render_template("ai_assistant.html", breakdown=None, goal=None)
+
+            connection = get_db()
+            task_count = 0
+            for subj in parsed_subjects:
+                cursor = connection.execute(
+                    "INSERT INTO subjects (name, user_id) VALUES (?, ?)",
+                    (subj["name"], current_user.id)
+                )
+                subject_id = cursor.lastrowid
+
+                for topic in subj["topics"]:
+                    topic_cursor = connection.execute(
+                        "INSERT INTO topics (name, subject_id) VALUES (?, ?)",
+                        (topic["name"], subject_id)
+                    )
+                    topic_id = topic_cursor.lastrowid
+
+                    for task_title in topic["tasks"]:
+                        connection.execute(
+                            """
+                            INSERT INTO tasks
+                                (title, estimated_minutes, priority, difficulty, deadline, topic_id)
+                            VALUES (?, 30, 2, 'Medium', ?, ?)
+                            """,
+                            (task_title, subj["deadline"], topic_id)
+                        )
+                        task_count += 1
+
+            connection.commit()
+            connection.close()
+            flash(f"Imported {len(parsed_subjects)} subject(s) and {task_count} task(s) into your planner.")
             return redirect(url_for("index"))
 
     return render_template("ai_assistant.html", breakdown=breakdown, goal=goal)
