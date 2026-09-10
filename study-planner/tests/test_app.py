@@ -18,6 +18,7 @@ def app_module():
     os.environ["STUDY_DB_PATH"] = db_path
     os.environ["SECRET_KEY"] = "test-secret"
     os.environ.pop("ANTHROPIC_API_KEY", None)  # force template fallback in tests
+    os.environ.pop("DATABASE_URL", None)  # force the SQLite path for tests
 
     import app as app_module
     importlib.reload(app_module)  # re-run module top-level with the new DB path
